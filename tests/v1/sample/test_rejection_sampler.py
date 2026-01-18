@@ -88,6 +88,8 @@ def create_sampling_metadata(
         top_p=top_p,
         top_k=top_k,
         generators=generators,
+        gumbel_seeds={},
+        gumbel_flip_positions={},
         max_num_logprobs=0,
         no_penalties=no_penalties,
         prompt_token_ids=prompt_token_ids,

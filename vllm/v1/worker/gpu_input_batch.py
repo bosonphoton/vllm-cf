@@ -35,6 +35,8 @@ class CachedRequestState:
     pooling_params: Optional[PoolingParams]
     generator: Optional[torch.Generator]
     gumbel_seed: Optional[int]
+    gumbel_flip_positions: Optional[list[int]] = None
+    gumbel_flip_ranks: Optional[list[int]] = None
 
     block_ids: tuple[list[int], ...]
     num_computed_tokens: int
@@ -213,6 +215,8 @@ class InputBatch:
 
         # req_index -> gumbel_seed
         self.gumbel_seeds: dict[int, int] = {}
+        # req_index -> {position -> rank}
+        self.gumbel_flip_positions: dict[int, dict[int, int]] = {}
 
         self.num_logprobs: dict[str, int] = {}
         # NOTE(rob): num_prompt_logprobs only includes reqs
@@ -371,6 +375,17 @@ class InputBatch:
 
             if request.gumbel_seed is not None:
                 self.gumbel_seeds[req_index] = request.gumbel_seed
+            if request.gumbel_flip_positions and request.gumbel_flip_ranks:
+                if len(request.gumbel_flip_positions) != len(request.gumbel_flip_ranks):
+                    raise ValueError(
+                        "gumbel_flip_positions and gumbel_flip_ranks must have the same length"
+                    )
+                self.gumbel_flip_positions[req_index] = {
+                    int(pos): int(rank)
+                    for pos, rank in zip(
+                        request.gumbel_flip_positions, request.gumbel_flip_ranks
+                    )
+                }
 
             if sampling_params.logprobs is not None:
                 self.num_logprobs[req_id] = (
@@ -481,6 +496,7 @@ class InputBatch:
         self.repetition_penalties_reqs.discard(req_id)
         self.generators.pop(req_index, None)
         self.gumbel_seeds.pop(req_index, None)
+        self.gumbel_flip_positions.pop(req_index, None)
         self.num_logprobs.pop(req_id, None)
         self.num_prompt_logprobs.pop(req_id, None)
         self.in_progress_prompt_logprobs_cpu.pop(req_id, None)
@@ -589,6 +605,7 @@ class InputBatch:
 
         swap_dict_values(self.generators, i1, i2)
         swap_dict_values(self.gumbel_seeds, i1, i2)
+        swap_dict_values(self.gumbel_flip_positions, i1, i2)
         swap_dict_values(self.bad_words_token_ids, i1, i2)
 
         if self.allowed_token_ids_mask_cpu_tensor is not None:
@@ -710,6 +727,9 @@ class InputBatch:
             gumbel_seed = self.gumbel_seeds.pop(last_req_index, None)
             if gumbel_seed is not None:
                 self.gumbel_seeds[empty_index] = gumbel_seed
+            flip_positions = self.gumbel_flip_positions.pop(last_req_index, None)
+            if flip_positions is not None:
+                self.gumbel_flip_positions[empty_index] = flip_positions
 
             # TODO convert these to LogitsProcessors
             if self.allowed_token_ids_mask_cpu_tensor is not None:
@@ -806,6 +826,7 @@ class InputBatch:
             top_k=None if self.no_top_k else self.top_k[:num_reqs],
             generators=self.generators,
             gumbel_seeds=self.gumbel_seeds,
+            gumbel_flip_positions=self.gumbel_flip_positions,
             max_num_logprobs=self.max_num_logprobs,
             prompt_token_ids=prompt_token_ids,
             frequency_penalties=self.frequency_penalties[:num_reqs],

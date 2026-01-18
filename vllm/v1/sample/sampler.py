@@ -186,6 +186,36 @@ class Sampler(nn.Module):
             logits_gumbel = logits + gumbel_noise
             # we now directly take argmax when gumbel noise is added
             sampled = self.greedy_sample(logits_gumbel)
+            # Optional counterfactual flip: choose k-th best under the same Gumbel noise at selected positions.
+            flip_positions = sampling_metadata.gumbel_flip_positions
+            if flip_positions and sampling_metadata.positions is not None:
+                positions = sampling_metadata.positions
+                if positions.ndim == 1:
+                    pos_values = positions
+                else:
+                    # M-RoPE positions: use first dimension for flip checks.
+                    pos_values = positions[0]
+                rows_to_flip = []
+                ranks_to_flip = []
+                for row_idx, pos_to_rank in flip_positions.items():
+                    if row_idx >= pos_values.shape[0]:
+                        continue
+                    pos = int(pos_values[row_idx].item())
+                    rank = pos_to_rank.get(pos)
+                    if rank is not None and rank > 1:
+                        rows_to_flip.append(row_idx)
+                        ranks_to_flip.append(int(rank))
+                if rows_to_flip:
+                    max_rank = max(ranks_to_flip)
+                    max_rank = min(max_rank, logits_gumbel.size(-1))
+                    topk_idx = torch.topk(
+                        logits_gumbel[rows_to_flip],
+                        k=max_rank,
+                        dim=-1,
+                    ).indices
+                    for i, row_idx in enumerate(rows_to_flip):
+                        rank = min(ranks_to_flip[i], max_rank)
+                        sampled[row_idx] = topk_idx[i, rank - 1]
             # return the original logits and logprobs
             processed_logprobs = None
             if sampling_metadata.max_num_logprobs is not None:

@@ -666,6 +666,37 @@ class GPUModelRunner(LoRAModelRunnerMixin, KVConnectorModelRunnerMixin):
             else:
                 generator = None
 
+            gumbel_flip_positions = None
+            gumbel_flip_ranks = None
+            if sampling_params and sampling_params.extra_args is not None:
+                gumbel_flip_positions = sampling_params.extra_args.get(
+                    "gumbel_flip_positions"
+                )
+                gumbel_flip_ranks = sampling_params.extra_args.get(
+                    "gumbel_flip_ranks"
+                )
+                gumbel_flip_positions_relative = sampling_params.extra_args.get(
+                    "gumbel_flip_positions_relative", False
+                )
+                if isinstance(gumbel_flip_positions, int):
+                    gumbel_flip_positions = [gumbel_flip_positions]
+                if isinstance(gumbel_flip_ranks, int):
+                    gumbel_flip_ranks = [gumbel_flip_ranks]
+                if gumbel_flip_positions is not None and gumbel_flip_ranks is None:
+                    gumbel_flip_ranks = [2] * len(gumbel_flip_positions)
+                if gumbel_flip_positions is not None and gumbel_flip_ranks is not None:
+                    if len(gumbel_flip_positions) != len(gumbel_flip_ranks):
+                        raise ValueError(
+                            "gumbel_flip_positions and gumbel_flip_ranks must have the same length"
+                        )
+                if gumbel_flip_positions and gumbel_flip_positions_relative:
+                    prompt_len = length_from_prompt_token_ids_or_embeds(
+                        new_req_data.prompt_token_ids, new_req_data.prompt_embeds
+                    )
+                    gumbel_flip_positions = [
+                        int(prompt_len + int(pos)) for pos in gumbel_flip_positions
+                    ]
+
             if self.is_pooling_model:
                 assert pooling_params is not None
                 task = pooling_params.task
@@ -684,6 +715,8 @@ class GPUModelRunner(LoRAModelRunnerMixin, KVConnectorModelRunnerMixin):
                 pooling_params=pooling_params,
                 generator=generator,
                 gumbel_seed=gumbel_seed,
+                gumbel_flip_positions=gumbel_flip_positions,
+                gumbel_flip_ranks=gumbel_flip_ranks,
                 block_ids=new_req_data.block_ids,
                 num_computed_tokens=new_req_data.num_computed_tokens,
                 output_token_ids=[],
@@ -3499,6 +3532,7 @@ class GPUModelRunner(LoRAModelRunnerMixin, KVConnectorModelRunnerMixin):
             top_k=dummy_tensors(logits.size(1) - 1),
             generators={},
             gumbel_seeds={},
+            gumbel_flip_positions={},
             max_num_logprobs=None,
             no_penalties=True,
             prompt_token_ids=None,

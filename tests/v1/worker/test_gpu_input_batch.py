@@ -153,6 +153,8 @@ def _construct_expected_sampling_metadata(
         if all(x == 0 for x in top_k)
         else torch.tensor(top_k, dtype=torch.int, device=device),
         generators={},
+        gumbel_seeds={},
+        gumbel_flip_positions={},
         max_num_logprobs=0,
         prompt_token_ids=make_tensor_with_pad(
             prompt_token_ids,
@@ -214,6 +216,9 @@ def _construct_cached_request_state(req_id_suffix: int):
         mm_features=[],
         block_ids=([],),
         generator=None,
+        gumbel_seed=None,
+        gumbel_flip_positions=None,
+        gumbel_flip_ranks=None,
         num_computed_tokens=len(output_token_ids),
         output_token_ids=output_token_ids,
     )

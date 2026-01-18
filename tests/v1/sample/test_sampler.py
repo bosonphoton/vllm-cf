@@ -147,6 +147,8 @@ def _create_default_sampling_metadata(
         top_p=None,
         top_k=None,
         generators={},
+        gumbel_seeds={},
+        gumbel_flip_positions={},
         max_num_logprobs=0,
         prompt_token_ids=_create_prompt_tokens_tensor(
             prompt_token_ids, vocab_size, device
