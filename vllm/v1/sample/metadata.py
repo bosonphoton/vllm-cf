@@ -24,6 +24,8 @@ class SamplingMetadata:
     gumbel_seeds: dict[int, int]
     # req_index -> {position -> rank}
     gumbel_flip_positions: dict[int, dict[int, int]]
+    # Gumbel top-k to return (if enabled)
+    gumbel_top_k: Optional[int]
 
     # None means no logprobs, 0 means sampled token logprobs only
     max_num_logprobs: Optional[int]

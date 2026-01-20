@@ -14,6 +14,7 @@ from vllm.outputs import (
     PoolingRequestOutput,
     RequestOutput,
 )
+from vllm.v1.outputs import GumbelTopKLists
 from vllm.sampling_params import RequestOutputKind
 from vllm.tracing import SpanAttributes, SpanKind, Tracer, extract_trace_context
 from vllm.transformers_utils.tokenizer import AnyTokenizer
@@ -100,6 +101,7 @@ class RequestState:
         top_p: Optional[float] = None,
         n: Optional[int] = None,
         temperature: Optional[float] = None,
+        gumbel_topk_enabled: bool = False,
     ):
         self.request_id = request_id
         self.parent_req = parent_req
@@ -121,8 +123,15 @@ class RequestState:
         self.is_prefilling = True
         self.queue = queue
         self.num_cached_tokens = 0
+        self.gumbel_topk = [] if gumbel_topk_enabled else None
 
         self.stats = RequestStateStats(arrival_time=arrival_time) if log_stats else None
+
+    def update_gumbel_topk(self, gumbel_topk: "GumbelTopKLists") -> None:
+        if self.gumbel_topk is None:
+            return
+        for token_ids, scores in zip(gumbel_topk.token_ids, gumbel_topk.scores):
+            self.gumbel_topk.append(list(zip(token_ids, scores)))
 
     @classmethod
     def from_new_request(
@@ -139,6 +148,11 @@ class RequestState:
             if not sampling_params.detokenize:
                 tokenizer = None
             output_kind = sampling_params.output_kind
+            gumbel_topk_enabled = False
+            if sampling_params.extra_args is not None:
+                gumbel_topk_enabled = sampling_params.extra_args.get(
+                    "gumbel_top_k"
+                ) is not None
             logprobs_processor = LogprobsProcessor.from_new_request(
                 tokenizer=tokenizer,
                 request=request,
@@ -158,6 +172,7 @@ class RequestState:
             top_p = None
             n = None
             temperature = None
+            gumbel_topk_enabled = False
             assert request.pooling_params is not None
             output_kind = request.pooling_params.output_kind
 
@@ -181,6 +196,7 @@ class RequestState:
             arrival_time=request.arrival_time,
             queue=queue,
             log_stats=log_stats,
+            gumbel_topk_enabled=gumbel_topk_enabled,
         )
 
     def make_request_output(
@@ -282,11 +298,16 @@ class RequestState:
         if delta and logprobs:
             logprobs = logprobs[-len(token_ids) :]
 
+        gumbel_topk = self.gumbel_topk
+        if delta and gumbel_topk:
+            gumbel_topk = gumbel_topk[-len(token_ids) :]
+
         return CompletionOutput(
             index=self.request_index,
             text=text,
             token_ids=token_ids,
             logprobs=logprobs,
+            gumbel_topk=gumbel_topk,
             cumulative_logprob=self.logprobs_processor.cumulative_logprob,
             finish_reason=str(finish_reason) if finished else None,
             stop_reason=stop_reason if finished else None,
@@ -447,6 +468,8 @@ class OutputProcessor:
                 # 3) Compute sample and prompt logprobs for request,
                 # if required.
                 req_state.logprobs_processor.update_from_output(engine_core_output)
+                if engine_core_output.gumbel_topk is not None:
+                    req_state.update_gumbel_topk(engine_core_output.gumbel_topk)
 
             # 4) Create and handle RequestOutput objects.
             if request_output := req_state.make_request_output(

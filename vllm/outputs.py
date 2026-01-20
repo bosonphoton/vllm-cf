@@ -43,6 +43,7 @@ class CompletionOutput:
     token_ids: GenericSequence[int]
     cumulative_logprob: Optional[float]
     logprobs: Optional[SampleLogprobs]
+    gumbel_topk: Optional[list[list[tuple[int, float]]]] = None
     finish_reason: Optional[str] = None
     stop_reason: Union[int, str, None] = None
     lora_request: Optional[LoRARequest] = None
@@ -57,6 +58,7 @@ class CompletionOutput:
             f"token_ids={self.token_ids}, "
             f"cumulative_logprob={self.cumulative_logprob}, "
             f"logprobs={self.logprobs}, "
+            f"gumbel_topk={self.gumbel_topk}, "
             f"finish_reason={self.finish_reason}, "
             f"stop_reason={self.stop_reason})"
         )
@@ -161,6 +163,10 @@ class RequestOutput:
                         if next_completion.logprobs:
                             assert completion.logprobs is not None
                             completion.logprobs.extend(next_completion.logprobs)
+                        if next_completion.gumbel_topk:
+                            if completion.gumbel_topk is None:
+                                completion.gumbel_topk = []
+                            completion.gumbel_topk.extend(next_completion.gumbel_topk)
                         completion.cumulative_logprob = (
                             next_completion.cumulative_logprob
                         )

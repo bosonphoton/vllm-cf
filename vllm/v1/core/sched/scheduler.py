@@ -916,6 +916,7 @@ class Scheduler(SchedulerInterface):
     ) -> dict[int, EngineCoreOutputs]:
         sampled_token_ids = model_runner_output.sampled_token_ids
         logprobs = model_runner_output.logprobs
+        gumbel_topk = model_runner_output.gumbel_topk
         prompt_logprobs_dict = model_runner_output.prompt_logprobs_dict
         num_scheduled_tokens = scheduler_output.num_scheduled_tokens
         pooler_outputs = model_runner_output.pooler_output
@@ -980,6 +981,7 @@ class Scheduler(SchedulerInterface):
 
             stopped = False
             new_logprobs = None
+            gumbel_topk_slice = None
             new_token_ids = generated_token_ids
             kv_transfer_params = None
             status_before_stop = request.status
@@ -1012,6 +1014,8 @@ class Scheduler(SchedulerInterface):
                 # NOTE: once we support N tokens per step (spec decode),
                 # the outer lists can be of length > 1.
                 new_logprobs = logprobs.slice(req_index, req_index + 1)
+            if gumbel_topk is not None:
+                gumbel_topk_slice = gumbel_topk.slice(req_index, req_index + 1)
 
             if new_token_ids and self.structured_output_manager.should_advance(request):
                 # NOTE: structured_output_request
@@ -1034,6 +1038,7 @@ class Scheduler(SchedulerInterface):
                         new_token_ids=new_token_ids,
                         finish_reason=request.get_finished_reason(),
                         new_logprobs=new_logprobs,
+                        gumbel_topk=gumbel_topk_slice,
                         new_prompt_logprobs_tensors=prompt_logprobs_tensors,
                         pooling_output=pooler_output,
                         stop_reason=request.stop_reason,

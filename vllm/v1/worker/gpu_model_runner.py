@@ -115,6 +115,7 @@ from vllm.v1.outputs import (
     EMPTY_MODEL_RUNNER_OUTPUT,
     AsyncModelRunnerOutput,
     DraftTokenIds,
+    GumbelTopKLists,
     LogprobsLists,
     LogprobsTensors,
     ModelRunnerOutput,
@@ -668,6 +669,7 @@ class GPUModelRunner(LoRAModelRunnerMixin, KVConnectorModelRunnerMixin):
 
             gumbel_flip_positions = None
             gumbel_flip_ranks = None
+            gumbel_top_k = None
             if sampling_params and sampling_params.extra_args is not None:
                 gumbel_flip_positions = sampling_params.extra_args.get(
                     "gumbel_flip_positions"
@@ -678,6 +680,9 @@ class GPUModelRunner(LoRAModelRunnerMixin, KVConnectorModelRunnerMixin):
                 gumbel_flip_positions_relative = sampling_params.extra_args.get(
                     "gumbel_flip_positions_relative", False
                 )
+                gumbel_top_k = sampling_params.extra_args.get("gumbel_top_k")
+                if gumbel_top_k is not None:
+                    gumbel_top_k = int(gumbel_top_k)
                 if isinstance(gumbel_flip_positions, int):
                     gumbel_flip_positions = [gumbel_flip_positions]
                 if isinstance(gumbel_flip_ranks, int):
@@ -693,8 +698,10 @@ class GPUModelRunner(LoRAModelRunnerMixin, KVConnectorModelRunnerMixin):
                     prompt_len = length_from_prompt_token_ids_or_embeds(
                         new_req_data.prompt_token_ids, new_req_data.prompt_embeds
                     )
+                    # Positions in sampling correspond to the last input token.
+                    base_pos = max(int(prompt_len) - 1, 0)
                     gumbel_flip_positions = [
-                        int(prompt_len + int(pos)) for pos in gumbel_flip_positions
+                        int(base_pos + int(pos)) for pos in gumbel_flip_positions
                     ]
 
             if self.is_pooling_model:
@@ -715,6 +722,7 @@ class GPUModelRunner(LoRAModelRunnerMixin, KVConnectorModelRunnerMixin):
                 pooling_params=pooling_params,
                 generator=generator,
                 gumbel_seed=gumbel_seed,
+                gumbel_top_k=gumbel_top_k,
                 gumbel_flip_positions=gumbel_flip_positions,
                 gumbel_flip_ranks=gumbel_flip_ranks,
                 block_ids=new_req_data.block_ids,
@@ -2090,6 +2098,7 @@ class GPUModelRunner(LoRAModelRunnerMixin, KVConnectorModelRunnerMixin):
             req_id_to_index=self.input_batch.req_id_to_index,
             sampled_token_ids=[],
             logprobs=None,
+            gumbel_topk=None,
             prompt_logprobs_dict={},
             pooler_output=pooler_output,
         )
@@ -2286,6 +2295,7 @@ class GPUModelRunner(LoRAModelRunnerMixin, KVConnectorModelRunnerMixin):
     ) -> tuple[
         dict[str, int],
         Optional[LogprobsLists],
+        Optional[GumbelTopKLists],
         list[list[int]],
         dict[str, Optional[LogprobsTensors]],
         list[str],
@@ -2316,6 +2326,12 @@ class GPUModelRunner(LoRAModelRunnerMixin, KVConnectorModelRunnerMixin):
         logprobs_tensors = sampler_output.logprobs_tensors
         logprobs_lists = (
             logprobs_tensors.tolists() if logprobs_tensors is not None else None
+        )
+        gumbel_topk_tensors = sampler_output.gumbel_topk_tensors
+        gumbel_topk_lists = (
+            gumbel_topk_tensors.tolists()
+            if gumbel_topk_tensors is not None
+            else None
         )
 
         # Compute prompt logprobs if needed.
@@ -2392,6 +2408,7 @@ class GPUModelRunner(LoRAModelRunnerMixin, KVConnectorModelRunnerMixin):
         return (
             num_nans_in_logits,
             logprobs_lists,
+            gumbel_topk_lists,
             valid_sampled_token_ids,
             prompt_logprobs_dict,
             req_ids_output_copy,
@@ -2662,6 +2679,7 @@ class GPUModelRunner(LoRAModelRunnerMixin, KVConnectorModelRunnerMixin):
             (
                 num_nans_in_logits,
                 logprobs_lists,
+                gumbel_topk_lists,
                 valid_sampled_token_ids,
                 prompt_logprobs_dict,
                 req_ids_output_copy,
@@ -2692,6 +2710,7 @@ class GPUModelRunner(LoRAModelRunnerMixin, KVConnectorModelRunnerMixin):
             req_id_to_index=req_id_to_index_output_copy,
             sampled_token_ids=valid_sampled_token_ids,
             logprobs=logprobs_lists,
+            gumbel_topk=gumbel_topk_lists,
             prompt_logprobs_dict=prompt_logprobs_dict,
             pooler_output=[],
             kv_connector_output=kv_connector_output,
@@ -3533,6 +3552,7 @@ class GPUModelRunner(LoRAModelRunnerMixin, KVConnectorModelRunnerMixin):
             generators={},
             gumbel_seeds={},
             gumbel_flip_positions={},
+            gumbel_top_k=None,
             max_num_logprobs=None,
             no_penalties=True,
             prompt_token_ids=None,

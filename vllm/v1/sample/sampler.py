@@ -11,7 +11,7 @@ from vllm.logger import init_logger
 logger = init_logger(__name__)
 from vllm.config.model import LogprobsMode
 from vllm.utils import is_pin_memory_available
-from vllm.v1.outputs import LogprobsTensors, SamplerOutput
+from vllm.v1.outputs import GumbelTopKTensors, LogprobsTensors, SamplerOutput
 from vllm.v1.sample.metadata import SamplingMetadata
 from vllm.v1.sample.ops.bad_words import apply_bad_words
 from vllm.v1.sample.ops.logprobs import batched_count_greater_than
@@ -92,7 +92,9 @@ class Sampler(nn.Module):
             logits, sampling_metadata, predict_bonus_token
         )
         # Sample the next token.
-        sampled, processed_logprobs = self.sample(logits, sampling_metadata)
+        sampled, processed_logprobs, gumbel_topk_tensors = self.sample(
+            logits, sampling_metadata
+        )
         if processed_logprobs is not None:
             raw_logprobs = processed_logprobs
         # Convert sampled token ids to int64 (long) type to ensure compatibility
@@ -119,6 +121,7 @@ class Sampler(nn.Module):
             # token per request.
             sampled_token_ids=sampled.unsqueeze(-1),
             logprobs_tensors=logprobs_tensors,
+            gumbel_topk_tensors=gumbel_topk_tensors,
         )
         return sampler_output
 
@@ -142,7 +145,7 @@ class Sampler(nn.Module):
         self,
         logits: torch.Tensor,
         sampling_metadata: SamplingMetadata,
-    ) -> tuple[torch.Tensor, Optional[torch.Tensor]]:
+    ) -> tuple[torch.Tensor, Optional[torch.Tensor], Optional["GumbelTopKTensors"]]:
         """Sample logits based on sampling metadata.
 
         The various logits processing functions called in this method
@@ -162,7 +165,7 @@ class Sampler(nn.Module):
                         processed_logprobs = logits
                     elif self.logprobs_mode == "processed_logprobs":
                         processed_logprobs = self.compute_logprobs(logits)
-                return greedy_sampled, processed_logprobs
+                return greedy_sampled, processed_logprobs, None
 
         assert sampling_metadata.temperature is not None
 
@@ -184,6 +187,18 @@ class Sampler(nn.Module):
                 sampling_metadata.positions
             )
             logits_gumbel = logits + gumbel_noise
+            gumbel_topk_tensors = None
+            if sampling_metadata.gumbel_top_k is not None:
+                gumbel_k = int(sampling_metadata.gumbel_top_k)
+                if gumbel_k > 0:
+                    gumbel_k = min(gumbel_k, logits_gumbel.size(-1))
+                    topk_vals, topk_idx = torch.topk(
+                        logits_gumbel, k=gumbel_k, dim=-1
+                    )
+                    gumbel_topk_tensors = GumbelTopKTensors(
+                        token_ids=topk_idx.to(torch.int32),
+                        scores=topk_vals.to(torch.float32),
+                    )
             # we now directly take argmax when gumbel noise is added
             sampled = self.greedy_sample(logits_gumbel)
             # Optional counterfactual flip: choose k-th best under the same Gumbel noise at selected positions.
@@ -223,7 +238,7 @@ class Sampler(nn.Module):
                     processed_logprobs = logits
                 elif self.logprobs_mode == "processed_logprobs":
                     processed_logprobs = self.compute_logprobs(logits)
-            return sampled, processed_logprobs
+            return sampled, processed_logprobs, gumbel_topk_tensors
 
         # Apply logits processors that only apply to random sampling
         # (argmax invariant)
@@ -239,7 +254,7 @@ class Sampler(nn.Module):
 
         
         if greedy_sampled is None:
-            return random_sampled, processed_logprobs
+            return random_sampled, processed_logprobs, None
 
         sampled = torch.where(
             sampling_metadata.temperature < _SAMPLING_EPS,
@@ -247,7 +262,7 @@ class Sampler(nn.Module):
             random_sampled,
             out=greedy_sampled,  # Reuse tensor
         )
-        return sampled, processed_logprobs
+        return sampled, processed_logprobs, None
 
     @staticmethod
     def compute_logprobs(logits: torch.Tensor) -> torch.Tensor:

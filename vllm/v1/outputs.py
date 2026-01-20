@@ -27,6 +27,18 @@ class LogprobsLists(NamedTuple):
         )
 
 
+class GumbelTopKLists(NamedTuple):
+    # [num_reqs, k]
+    token_ids: list[list[int]]
+    # [num_reqs, k]
+    scores: list[list[float]]
+
+    def slice(self, start: int, end: int):
+        return GumbelTopKLists(
+            self.token_ids[start:end],
+            self.scores[start:end],
+        )
+
 class LogprobsTensors(NamedTuple):
     # [num_reqs, max_num_logprobs + 1]
     logprob_token_ids: torch.Tensor
@@ -62,6 +74,18 @@ class LogprobsTensors(NamedTuple):
         )
 
 
+class GumbelTopKTensors(NamedTuple):
+    # [num_reqs, k]
+    token_ids: torch.Tensor
+    # [num_reqs, k]
+    scores: torch.Tensor
+
+    def tolists(self):
+        return GumbelTopKLists(
+            self.token_ids.tolist(),
+            self.scores.tolist(),
+        )
+
 # [num_reqs, <dynamic>]
 # The shape of each element depends on the pooler used
 PoolerOutput = Union[torch.Tensor, list[torch.Tensor]]
@@ -75,6 +99,7 @@ class SamplerOutput:
     # PLACEHOLDER_TOKEN_ID (-1 by default) is used for padding.
     sampled_token_ids: torch.Tensor
     logprobs_tensors: Optional[LogprobsTensors]
+    gumbel_topk_tensors: Optional[GumbelTopKTensors] = None
 
 
 @dataclass
@@ -125,6 +150,9 @@ class ModelRunnerOutput:
     # [num_reqs, hidden_size]
     pooler_output: list[Optional[torch.Tensor]]
 
+    # [num_reqs, k]
+    gumbel_topk: Optional[GumbelTopKLists] = None
+
     kv_connector_output: Optional[KVConnectorOutput] = None
 
     # req_id -> num_nans_in_logits
@@ -157,6 +185,7 @@ EMPTY_MODEL_RUNNER_OUTPUT = ModelRunnerOutput(
     req_id_to_index={},
     sampled_token_ids=[],
     logprobs=None,
+    gumbel_topk=None,
     prompt_logprobs_dict={},
     pooler_output=[],
     num_nans_in_logits=None,

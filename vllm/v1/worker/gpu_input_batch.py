@@ -35,12 +35,14 @@ class CachedRequestState:
     pooling_params: Optional[PoolingParams]
     generator: Optional[torch.Generator]
     gumbel_seed: Optional[int]
-    gumbel_flip_positions: Optional[list[int]] = None
-    gumbel_flip_ranks: Optional[list[int]] = None
+    gumbel_top_k: Optional[int]
 
     block_ids: tuple[list[int], ...]
     num_computed_tokens: int
     output_token_ids: list[int]
+
+    gumbel_flip_positions: Optional[list[int]] = None
+    gumbel_flip_ranks: Optional[list[int]] = None
 
     mrope_positions: Optional[torch.Tensor] = None
     mrope_position_delta: Optional[int] = None
@@ -217,6 +219,8 @@ class InputBatch:
         self.gumbel_seeds: dict[int, int] = {}
         # req_index -> {position -> rank}
         self.gumbel_flip_positions: dict[int, dict[int, int]] = {}
+        # req_index -> gumbel_top_k
+        self.gumbel_top_k: dict[int, int] = {}
 
         self.num_logprobs: dict[str, int] = {}
         # NOTE(rob): num_prompt_logprobs only includes reqs
@@ -375,6 +379,10 @@ class InputBatch:
 
             if request.gumbel_seed is not None:
                 self.gumbel_seeds[req_index] = request.gumbel_seed
+            if request.gumbel_top_k is not None:
+                if request.gumbel_seed is None:
+                    raise ValueError("gumbel_top_k requires gumbel_seed to be set.")
+                self.gumbel_top_k[req_index] = int(request.gumbel_top_k)
             if request.gumbel_flip_positions and request.gumbel_flip_ranks:
                 if len(request.gumbel_flip_positions) != len(request.gumbel_flip_ranks):
                     raise ValueError(
@@ -497,6 +505,7 @@ class InputBatch:
         self.generators.pop(req_index, None)
         self.gumbel_seeds.pop(req_index, None)
         self.gumbel_flip_positions.pop(req_index, None)
+        self.gumbel_top_k.pop(req_index, None)
         self.num_logprobs.pop(req_id, None)
         self.num_prompt_logprobs.pop(req_id, None)
         self.in_progress_prompt_logprobs_cpu.pop(req_id, None)
@@ -818,6 +827,13 @@ class InputBatch:
             )
             allowed_token_ids_mask = self.allowed_token_ids_mask[:num_reqs]
 
+        gumbel_top_k = None
+        if self.gumbel_top_k:
+            values = set(self.gumbel_top_k.values())
+            if len(values) > 1:
+                raise ValueError("gumbel_top_k must be consistent across the batch.")
+            gumbel_top_k = values.pop()
+
         return SamplingMetadata(
             temperature=temperature,
             all_greedy=self.all_greedy,
@@ -827,6 +843,7 @@ class InputBatch:
             generators=self.generators,
             gumbel_seeds=self.gumbel_seeds,
             gumbel_flip_positions=self.gumbel_flip_positions,
+            gumbel_top_k=gumbel_top_k,
             max_num_logprobs=self.max_num_logprobs,
             prompt_token_ids=prompt_token_ids,
             frequency_penalties=self.frequency_penalties[:num_reqs],

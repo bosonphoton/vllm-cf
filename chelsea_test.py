@@ -97,7 +97,7 @@ def generate_completion(
 
 # Run the full counterfactual sampling test.
 def main() -> None:
-    llm = vllm.LLM(model=MODEL_NAME)
+    llm = vllm.LLM(model=MODEL_NAME, max_logprobs=-1)
     tokenizer = llm.get_tokenizer()
 
     output = get_first_token_output(llm, PROMPT)
